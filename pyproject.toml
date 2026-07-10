@@ -1,0 +1,9 @@
+[project]
+name = "pytmg-mediainfo"
+version = "0.1.0"
+description = "A Python wrapper around ffprobe"
+requires-python = ">=3.10"
+license = "GPL-3.0-only"
+authors = [
+    { name = "pytmg" }
+]

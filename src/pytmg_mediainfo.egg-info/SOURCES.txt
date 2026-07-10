@@ -1,0 +1,9 @@
+LICENSE
+README.md
+pyproject.toml
+src/mediainfo/MediaInfo.py
+src/mediainfo/__init__.py
+src/pytmg_mediainfo.egg-info/PKG-INFO
+src/pytmg_mediainfo.egg-info/SOURCES.txt
+src/pytmg_mediainfo.egg-info/dependency_links.txt
+src/pytmg_mediainfo.egg-info/top_level.txt
