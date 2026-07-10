@@ -17,3 +17,6 @@ print(info.streams.video.codec_name)
 print(info.streams.video.resolution)
 print(f"{info.streams.audio.samplerate_khz} kHz ({info.streams.audio.samplerate_preset})")
 ```
+
+https://pypi.org/project/pytmg-mediainfo/
+https://github.com/pytmg/mediainfo
