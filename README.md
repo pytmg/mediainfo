@@ -1,6 +1,6 @@
 # MediaInfo
 
-MediaInfi is a Python wrapper library for `ffprobe` to provide a clean, developer-friendly API for developers to use when inspecting media files.
+MediaInfo is a Python wrapper library for `ffprobe` to provide a clean, developer-friendly API for developers to use when inspecting media files.
 
 This project is protected under version 3 of the GNU General Public License.
 
