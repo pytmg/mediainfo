@@ -1,7 +1,10 @@
 [project]
 name = "pytmg-mediainfo"
-version = "0.1.1"
+version = "0.1.2"
 description = "A Python wrapper around ffprobe"
+dependencies=[
+    "typing_extension>=4.9.0"
+]
 requires-python = ">=3.10"
 license = "GPL-3.0-only"
 readme = "README.md"

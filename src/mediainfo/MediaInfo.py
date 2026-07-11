@@ -6,15 +6,44 @@
 # the Free Software Foundation, either version 3 of the license or
 # (at your option) any later version
 
+"""
+MediaInfo.py
+
+A Python wrapper around ffprobe.
+
+This project is currently in development, but is considered stable enough
+for general use. Deprecated features are removed in minor releases.
+
+Current deprecations will be removed in V0.2.0.
+"""
+
 import os, shutil, subprocess, json, math
+from typing_extensions import deprecated
 from typing import Literal
 from types import SimpleNamespace
 
-class FFProbeNotFoundError(Exception):
-    """ffprobe executable not found"""
-    pass
+class Exceptions:
+    class MediaInfoBaseError(Exception):
+        """MediaInfo base error"""
+        pass
 
-class ffprobe_format:
+    class FFProbeBaseError(Exception):
+        """FFProbe base error"""
+        pass
+
+    class FFProbeNotFoundError(FFProbeBaseError):
+        """ffprobe executable not found"""
+        pass
+
+    class MediaInfoMissingProperties(MediaInfoBaseError):
+        """Missing properties for stream"""
+        pass
+
+    class MediaInfoCannotReadJSON(MediaInfoBaseError):
+        """JSON cannot be decoded."""
+        pass
+
+class Format:
     """
     Format information.
     """
@@ -25,24 +54,56 @@ class ffprobe_format:
         self.format_name = d["format_name"]
         self.format_long_name = d["format_long_name"]
         self.start_time = d["start_time"]
-        self.duration = d["duration"]
+        self.duration: float = float(d["duration"])
         self.size = d["size"]
         self.bit_rate = d["bit_rate"]
         self.probe_score = d["probe_score"]
         self.tags = d["tags"] # tags is just another dict buuut who cares anyway
+    
+    @property
+    def duration_s(self) -> float:
+        """
+        Alias for builtin duration
+        """
+        return self.duration
+    
+    @property
+    def duration_str(self) -> str:
+        """
+        Computed from builtin duration
+        Duration in a formatted string.
+        """
+        seconds = int(self.duration)
+        hours, remainder = divmod(seconds, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        if hours:
+            return f"{hours}h {minutes}m {seconds}s"
+        if minutes:
+            return f"{minutes}m {seconds}s"
+        return f"{seconds}s"
 
-class ffprobe_streams_video:
+class Stream:
+    """
+    Base stream class, extend from this if you're making your own streams, like captions or others that aren't already included.
+    """
+    def __init__(self, d):
+        self.index: int = d["index"]
+        self.codec_type: str = d["codec_type"]
+        self.codec_name: str = d["codec_name"]
+
+    def __repr__(self) -> str:
+        return f"<{self.__class__.__name__} codec_name='{self.codec_name}' codec_type='{self.codec_type}'>"
+
+class VideoStream(Stream):
     """
     The video stream's information, doesn't include data.
 
     Has helper properties.
     """
     def __init__(self, d):
-        self.index: int = d["index"]
-        self.codec_name: str = d["codec_name"]
+        super().__init__(d)
         self.codec_long_name: str = d["codec_long_name"]
         self.profile: str = d["profile"]
-        self.codec_type: str = d["codec_type"]
         self.codec_tag_string: str = d["codec_tag_string"]
         self.codec_tag: str = d["codec_tag"]
         self.mime_codec_string: str = d["mime_codec_string"]
@@ -171,21 +232,22 @@ class ffprobe_streams_video:
     @property
     def megapixels(self) -> float:
         """
-        Computed from builtins width and height
+        Computed from pixels
         """
-        return round(self.width * self.height / 1_000_000, 2)
+        return round(self.pixels / 1_000_000, 2)
     
-class ffprobe_streams_audio:
+    def __repr__(self) -> str:
+        return f"<{self.__class__.__name__} resolution='{self.resolution}' fps={self.fps} codec_name='{self.codec_name}'>"
+    
+class AudioStream(Stream):
     """
     The audio stream's information, doesn't include data.
 
     Has helper properties.
     """
     def __init__(self, d):
-        self.index: int = d["index"]
-        self.codec_name: str = d["codec_name"]
+        super().__init__(d)
         self.codec_long_name: str = d["codec_long_name"]
-        self.codec_type: str = d["codec_type"]
         self.codec_tag_string: str = d["codec_tag_string"]
         self.codec_tag: str = d["codec_tag"]
         self.mime_codec_string: str = d["mime_codec_string"]
@@ -294,29 +356,97 @@ class ffprobe_streams_audio:
         if minutes:
             return f"{minutes}m {seconds}s"
         return f"{seconds}s"
+    
+    def __repr__(self) -> str:
+        return f"<{self.__class__.__name__} samplerate_khz={self.samplerate_khz} channels={self.channels} codec_name='{self.codec_name}'>"
 
-class ffprobe_streams:
-        def __init__(self, d):
-            firstvideostream = [0, 99999999999]
-            firstaudiostream = [0, 99999999999]
-            self.allstreams = []
-            for i, stream in enumerate(d):
-                if stream["codec_type"] == "video":
-                    obj = ffprobe_streams_video(stream)
-                    if firstvideostream[1] > i:
-                        firstvideostream[0] = obj
-                    self.allstreams.append(obj)
-                if stream["codec_type"] == "audio":
-                    obj = ffprobe_streams_audio(stream)
-                    if firstaudiostream[1] > i:
-                        firstaudiostream[0] = obj
-                    self.allstreams.append(obj)
-            self.video = firstvideostream[0]
-            self.audio = firstaudiostream[0]
+class Streams:
+    """
+    Streams information.
+
+    Can be subclassed to add custom stream types as additional properties.
+    Subclasses should preserve the collection attributes.
+    """
+    def __init__(self, d):
+        self.all: list[Stream] = []
+        self.raw: list[dict] = d
+        try:
+            self.process_stream("video", VideoStream)
+            self.process_stream("audio", AudioStream)
+        except KeyError as e:
+            raise Exceptions.MediaInfoMissingProperties(f"Missing stream property. KeyErr: {e}")
+        
+    def process_stream(self, codec_type: str, stream_class: type[Stream]) -> list[Stream]:
+        """
+        Process more stream types, useful when extending.
+
+        Parameters:
+            codec_type (str): The codec type, can be "video", "audio", "subtitle", etc
+            stream_class (type[Stream]): The class of the stream you're processing. Class must be based off Stream.
+
+        Returns:
+            list[Stream]: A list of the processed streams.
+        """
+        processed = []
+        for stream in self.raw:
+            if stream["codec_type"] == codec_type:
+                obj = stream_class(stream)
+                self.all.append(obj)
+                processed.append(obj)
+        return processed
+
+    @property
+    def videos(self) -> list[VideoStream]:
+        """
+        All video streams
+        """
+        videos = []
+        for stream in self.all:
+            if isinstance(stream, VideoStream):
+                videos.append(stream)
+        return videos
+
+    @property
+    def audios(self) -> list[AudioStream]:
+        """
+        All audio streams
+        """
+        audios = []
+        for stream in self.all:
+            if isinstance(stream, AudioStream):
+                audios.append(stream)
+        return audios
+
+    @property
+    def video(self) -> VideoStream | None:
+        """
+        Computed from videos
+        First video stream
+        """
+        try:
+            return self.videos[0]
+        except IndexError:
+            return None
+
+    @property
+    def audio(self) -> AudioStream | None:
+        """
+        Computed from audios
+        First audio stream
+        """
+        try:
+            return self.audios[0]
+        except IndexError:
+            return None
+
+    @property
+    @deprecated("use .all instead")
+    def allstreams(self) -> list[Stream]:
+        return self.all
 
 class MediaInfo:
     """
-    A wrapper around ffprobe, built in with ffmpeg.
+    A wrapper around ffprobe, an ffmpeg builtin.
     """
     def __init__(self, file):
 
@@ -326,19 +456,36 @@ class MediaInfo:
             raise FileNotFoundError(f"File {file} does not exist.")
         
         if not shutil.which("ffprobe"):
-            raise FFProbeNotFoundError("FFProbe not found in PATH. Install FFmpeg (which includes ffprobe) and add it to PATH.")
+            raise Exceptions.FFProbeNotFoundError("FFProbe not found in PATH. Install FFmpeg (which includes ffprobe) and add it to PATH.")
 
         r = subprocess.run(["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", "-show_streams", path],
             capture_output = True, text = True)
 
         self.path = path
-        self.dict = json.loads(r.stdout)
+        try:
+            self.dict = json.loads(r.stdout)
+        except json.JSONDecodeError:
+            raise Exceptions.MediaInfoCannotReadJSON("Invalid JSON, cannot be decoded.")
 
-        self.streams = ffprobe_streams(self.dict["streams"])
-        self.format = ffprobe_format(self.dict["format"])
+        self.streams = Streams(self.dict["streams"])
+        self.format = Format(self.dict["format"])
 
     def __repr__(self):
-        return f"<{self.__class__.__name__} file='{os.path.basename(self.path)}' streams={len(self.streams.allstreams)}>"
+        return f"<{self.__class__.__name__} file='{os.path.basename(self.path)}' streams={len(self.streams.all)}>"
 
     def __str__(self):
-        return f"{repr(self)}\nVideo: {self.streams.video.codec_name} {self.streams.video.resolution} {self.streams.video.fps}fps\nAudio: {self.streams.audio.codec_name} {self.streams.audio.samplerate_khz}kHz {self.streams.audio.channels_category}\nDuration: {self.streams.video.duration}"
+        String = f"{repr(self)}"
+        if not self.streams.video:
+            String += "\nVideo: none"
+        if not self.streams.audio:
+            String += "\nAudio: none"
+
+        for stream in self.streams.all:
+            if isinstance(stream, VideoStream):
+                String += f"\nStream #{stream.index}: Video: {stream.codec_name} {stream.resolution} {stream.fps}"
+            if isinstance(stream, AudioStream):
+                String += f"\nStream #{stream.index}: Audio: {stream.codec_name} {stream.samplerate_khz}kHz {stream.channels_category}"
+        
+        String += f"\nDuration: {self.format.duration_str}"
+
+        return String
